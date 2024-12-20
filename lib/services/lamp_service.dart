@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/lamp_state.dart';
 import 'package:multicast_dns/multicast_dns.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 class LampDevice {
   final String name;
@@ -22,6 +23,18 @@ class LampService {
 
   // Discover all smartlamps on the network
   static Future<List<LampDevice>> discoverLamps() async {
+    if (kIsWeb) {
+      // For web, return a hardcoded device for testing
+      // or implement alternative discovery mechanism
+      return [
+        LampDevice(
+          name: 'smartlamp',
+          address: '192.168.1.xxx', // Replace with your lamp's IP
+          port: 80,
+        ),
+      ];
+    }
+
     final devices = <LampDevice>[];
 
     try {
