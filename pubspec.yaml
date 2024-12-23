@@ -35,6 +35,9 @@ dependencies:
   # riverpod: ^2.6.1
   flutter_riverpod: ^2.6.1
   multicast_dns: ^0.3.2
+  shared_preferences: ^2.2.2
+  fl_chart: ^0.65.0
+  collection: ^1.18.0
 
 
 dev_dependencies:

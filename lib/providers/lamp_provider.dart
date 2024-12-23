@@ -2,13 +2,25 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/lamp_state.dart';
 import '../services/lamp_service.dart';
 import 'dart:async';
+import '../models/lamp_log_entry.dart';
+import '../services/lamp_log_service.dart';
 
 final lampServiceProvider = Provider((ref) => LampService());
 
 final lampStateProvider =
     StateNotifierProvider<LampStateNotifier, AsyncValue<LampState>>((ref) {
-  return LampStateNotifier(ref.watch(lampServiceProvider));
+  final lampService = ref.watch(lampServiceProvider);
+  final deviceId = lampService.getCurrentDevice()?.name ?? 'unknown';
+  return LampStateNotifier(
+    lampService,
+    deviceId,
+    ref.watch(lampLogServiceProvider(deviceId)),
+  );
 });
+
+final lampLogServiceProvider = Provider.family<LampLogService, String>(
+  (ref, deviceId) => LampLogService(deviceId),
+);
 
 class LampStateNotifier extends StateNotifier<AsyncValue<LampState>> {
   final LampService _lampService;
@@ -17,26 +29,55 @@ class LampStateNotifier extends StateNotifier<AsyncValue<LampState>> {
   bool _isRetrying = false;
   static const _pollInterval =
       Duration(milliseconds: 333); // 3Hz to match slider
+  static const _logInterval = Duration(seconds: 10);
+  Timer? _logTimer;
+  final String deviceId;
+  final LampLogService _logService;
+  bool _isPaused = false;
 
-  LampStateNotifier(this._lampService) : super(const AsyncValue.loading()) {
+  LampStateNotifier(this._lampService, this.deviceId, this._logService)
+      : super(const AsyncValue.loading()) {
     refreshState();
     // Start polling
     _startPolling();
+    _startLogging();
   }
 
   @override
   void dispose() {
     _retryTimer?.cancel();
     _pollTimer?.cancel();
+    _logTimer?.cancel();
     super.dispose();
+  }
+
+  void pausePolling() {
+    _isPaused = true;
+  }
+
+  void resumePolling() {
+    _isPaused = false;
   }
 
   void _startPolling() {
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(_pollInterval, (_) {
-      // Only poll if we're not in an error state
-      if (state is! AsyncError) {
+      // Only poll if we're not paused and not in an error state
+      if (!_isPaused && state is! AsyncError) {
         refreshState();
+      }
+    });
+  }
+
+  void _startLogging() {
+    _logTimer?.cancel();
+    _logTimer = Timer.periodic(_logInterval, (_) {
+      if (state case AsyncData(value: final currentState)) {
+        _logService.addEntry(LampLogEntry(
+          timestamp: DateTime.now(),
+          batteryVoltage: currentState.batteryVoltage,
+          brightness: currentState.brightness,
+        ));
       }
     });
   }
@@ -79,7 +120,6 @@ class LampStateNotifier extends StateNotifier<AsyncValue<LampState>> {
   }
 
   Future<void> setBrightness(double brightness) async {
-    // Store the previous state in case of error
     final previousState = state;
 
     try {
@@ -95,9 +135,7 @@ class LampStateNotifier extends StateNotifier<AsyncValue<LampState>> {
       await _lampService.setBrightness(brightness);
       await refreshState();
     } catch (e) {
-      // Revert to previous state on error
       state = previousState;
-      // Don't throw, let the retry mechanism handle reconnection
     }
   }
 }

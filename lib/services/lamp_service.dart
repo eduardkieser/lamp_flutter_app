@@ -21,6 +21,11 @@ class LampDevice {
 class LampService {
   LampDevice? _currentDevice;
 
+  // Add this method
+  LampDevice? getCurrentDevice() {
+    return _currentDevice;
+  }
+
   // Discover all smartlamps on the network
   static Future<List<LampDevice>> discoverLamps() async {
     if (kIsWeb) {

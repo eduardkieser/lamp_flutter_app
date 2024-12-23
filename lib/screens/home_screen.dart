@@ -3,6 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/lamp_provider.dart';
 import '../models/lamp_state.dart';
 import 'dart:async';
+import 'package:fl_chart/fl_chart.dart';
+import '../models/lamp_log_entry.dart';
+import 'package:collection/collection.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -14,6 +17,7 @@ class HomeScreen extends ConsumerStatefulWidget {
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   Timer? _debounceTimer;
   double? _pendingValue;
+  bool _isSliding = false;
   static const _updateInterval = Duration(milliseconds: 333); // ~3Hz
 
   @override
@@ -23,40 +27,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   void _handleSliderChange(double value) {
+    _isSliding = true;
     _pendingValue = value;
+    ref.read(lampStateProvider.notifier).pausePolling();
+    setState(() {});
 
-    // If no timer is active, update immediately and start the timer
-    if (_debounceTimer == null) {
-      ref.read(lampStateProvider.notifier).setBrightness(value);
-      _debounceTimer = Timer.periodic(_updateInterval, (_) {
-        if (_pendingValue != null) {
-          ref.read(lampStateProvider.notifier).setBrightness(_pendingValue!);
-          _pendingValue = null;
-        }
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final lampState = ref.watch(lampStateProvider);
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Lamp Control'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _buildDeviceInfo(lampState),
-            const SizedBox(height: 20),
-            _buildBrightnessControls(context, lampState),
-          ],
-        ),
-      ),
-    );
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(_updateInterval, () {
+      if (_pendingValue != null) {
+        ref.read(lampStateProvider.notifier).setBrightness(_pendingValue!);
+        _pendingValue = null;
+        _isSliding = false;
+        ref.read(lampStateProvider.notifier).resumePolling();
+        setState(() {});
+      }
+    });
   }
 
   Widget _buildDeviceInfo(AsyncValue<LampState> lampState) {
@@ -100,7 +85,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   ) {
     final bool isEnabled = lampState is AsyncData;
     final double currentValue = switch (lampState) {
-      AsyncData(:final value) => value.brightness,
+      AsyncData(:final value) =>
+        _isSliding ? (_pendingValue ?? value.brightness) : value.brightness,
       _ => 0.0,
     };
 
@@ -127,6 +113,122 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildGraphs(AsyncValue<LampState> lampState) {
+    if (lampState case AsyncData(value: final state)) {
+      return FutureBuilder<List<LampLogEntry>>(
+        future: ref.read(lampLogServiceProvider(state.deviceName)).getLogs(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) return const CircularProgressIndicator();
+
+          final logs = snapshot.data!;
+          if (logs.isEmpty) return const Text('No data logged yet');
+
+          return Column(
+            children: [
+              const SizedBox(height: 20),
+              _buildChart(
+                'Battery Voltage',
+                logs,
+                (entry) => entry.batteryVoltage,
+                Colors.blue,
+              ),
+              const SizedBox(height: 20),
+              _buildChart(
+                'Brightness',
+                logs,
+                (entry) => entry.brightness,
+                Colors.orange,
+              ),
+            ],
+          );
+        },
+      );
+    }
+    return const SizedBox();
+  }
+
+  Widget _buildChart(
+    String title,
+    List<LampLogEntry> logs,
+    double Function(LampLogEntry) getValue,
+    Color color,
+  ) {
+    return SizedBox(
+      height: 200,
+      child: Column(
+        children: [
+          Text(title),
+          Expanded(
+            child: LineChart(
+              LineChartData(
+                gridData: FlGridData(show: true),
+                titlesData: FlTitlesData(
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 40,
+                      getTitlesWidget: (value, meta) {
+                        return Text(
+                          value.toStringAsFixed(1),
+                          style: const TextStyle(fontSize: 10),
+                        );
+                      },
+                    ),
+                  ),
+                  topTitles: AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  rightTitles: AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                ),
+                borderData: FlBorderData(show: true),
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: logs.mapIndexed((index, entry) {
+                      return FlSpot(index.toDouble(), getValue(entry));
+                    }).toList(),
+                    isCurved: true,
+                    color: color,
+                    dotData: FlDotData(show: false),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lampState = ref.watch(lampStateProvider);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Lamp Control'),
+      ),
+      body: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildDeviceInfo(lampState),
+              const SizedBox(height: 20),
+              _buildBrightnessControls(context, lampState),
+              _buildGraphs(lampState),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
